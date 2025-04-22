@@ -1,0 +1,19 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+
+
+# очищение от неактуальных моделей, типов оборудования, а также оборудования, которое было выдано в исправном состоянии
+# например, доставлено в сервис только для профилактической диагностики
+# обработка была с неотфильтрованными данными, поэтому здесь наполнение примерное
+df = df[~df['type'].isin([type_01, type_02, ...])]
+df = df[~df['rep_group'].isin([group_01, group_02])]
+df = df[~df['model'].isin([model_01, model_02, ...])]
+df = df[~df['out_serv'].isin(['yes'])] # оборудование, на которое только сформированы заявки
+
+# удаление моделей, которые встречаются менее 5 раз
+model_counts = df['model'].value_counts()
+rare_models = model_counts[model_counts < 5]
+df = df[~df['model'].isin(rare_models.index)]
+
+
+  
