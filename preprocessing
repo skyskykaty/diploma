@@ -1,0 +1,124 @@
+# преобразование строки с дефектами
+
+def process_defects(defect_str):
+    '''
+    преобразовывает строку с дефектами в список дефектов
+    возвращает список дефектов
+    '''
+    defect_str = str(defect_str)
+
+    # Обрпабатываем вложенные скобки
+    result = []
+    buffer = []
+    open_parentheses = 0
+
+    for char in defect_str:
+        if char == '(':
+            if open_parentheses > 0:
+                buffer.append(char)
+            open_parentheses += 1
+            if open_parentheses == 1:
+                buffer.append('(')  # Добавляем первую скобку
+        elif char == ')':
+            open_parentheses -= 1
+            if open_parentheses > 0:
+                buffer.append(char)
+            elif open_parentheses == 0:
+                buffer.append(')')
+                result.append(''.join(buffer).strip())
+                buffer = []
+        elif char == ',' and open_parentheses == 0:
+            if buffer:
+                result.append(''.join(buffer).strip())
+                buffer = []
+        else:
+            buffer.append(char)
+
+    if buffer:
+        result.append(''.join(buffer).strip())
+
+    return result
+
+
+def extract_cycles_count(defect_list):
+    '''
+    переносит количество включений в отдельный столбец
+    возвращает список дефектов без количества включений, количество включений в отдельном столбце
+    '''
+    if not isinstance(defect_list, list):
+        return pd.Series([None, defect_list])
+
+    cycle_count = None
+    cleaned_defects = []
+
+    for d in defect_list:
+        d_clean = d.strip()
+
+        # Если элемент начинается с "88" (учтём, что могут быть варианты "88", "88-XX", и т.п.)
+        if d_clean.startswith("88"):
+            match = re.search(r'\((\d+)\+?\)', d_clean)
+            if match:
+                cycle_count = int(match.group(1))
+                # Не добавляем этот элемент в итоговый список дефектов
+                continue
+
+        cleaned_defects.append(d)
+
+    return pd.Series([cycle_count, cleaned_defects])
+
+
+def remove_99_defects(defects):
+    '''
+    удаляет дефекты с кодом 99-ХХ
+    возвращает список без этих дефектов
+    '''
+    filtered = []
+    for d in defects:
+        # Если элемент начинается с "99" (с вариантами "99", "99-XX" и т.д.),
+        # игнорируем его
+        if d.strip().startswith("99"):
+            continue
+        filtered.append(d)
+
+    return filtered if filtered else None
+
+
+# только для обработки исторических данных
+
+def extract_cycle_counts_from_list(defects):
+    '''
+    обрабатывает количество включений, которое внесено неверно
+    возвращает количество включений в отдельном столбце
+    '''
+    if not isinstance(defects, list):
+        return pd.Series([None, defects])
+
+    cycle_count = None
+    pattern = r'^\((\d+)\+?\)$'
+
+    if defects and re.match(pattern, defects[0]):
+        m = re.match(pattern, defects[0])
+        if m:
+            cycle_count = int(m.group(1))
+        defects = defects[1:]
+
+    return pd.Series([cycle_count, defects])
+
+
+def remove_noncode_comments(defect_list):
+    '''
+    удаляет неверно внесенные комментарии
+    возвращает список без комментариев
+    '''
+    # Если defect_list — это None, возвращаем его без изменений
+    if defect_list is None:
+        return defect_list
+
+    # Регулярное выражение для поиска дефектов в формате XX-XX и комментариев в скобках
+    valid_defect_pattern = r'^\d{2}-\d{2}(\s*\(.*\))?$'
+
+    # Фильтруем дефекты, оставляя только те, которые соответствуют формату XX-XX (с комментариями в скобках)
+    cleaned_list = [defect.strip() for defect in defect_list
+                    if pd.notna(defect) and re.match(valid_defect_pattern, defect.strip())]
+
+    return cleaned_list
