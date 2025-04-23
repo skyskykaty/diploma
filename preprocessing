@@ -1,5 +1,13 @@
-# преобразование строки с дефектами
+import nltk
+from nltk.corpus import stopwords
+from nltk.stem.snowball import SnowballStemmer
+from scipy.sparse import hstack
+from sklearn.preprocessing import MultiLabelBinarizer, OneHotEncoder, StandardScaler
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.impute import SimpleImputer
 
+
+# преобразование строки с дефектами
 def process_defects(defect_str): -> list
     '''
     # преобразовывает строку с дефектами в список дефектов вида ['XX-YY (комментарий), ...]
@@ -170,9 +178,209 @@ def replace_defect_codes_with_description(defect_list, df_transl):
 
     return result
 
+def preprocess_text(text):
+    '''
+    Осуществляет предобработку текста:
+    - Преобразует списки в строки
+    - Приводит к нижнему регистру
+    - Удаляет лишние символы
+    - Удаляет стоп-слова
+    - Выполняет стемминг
+    - Возвращает список токенов
+    '''
+    # Преобразуем список в строку, если нужно
+    if isinstance(text, list):
+        text = ' '.join(text)
+
+    if not isinstance(text, str):
+        return []
+
+    text = text.lower()
+    text = re.sub(r'[^а-яa-z0-9\s]', '', text)  # Удаляем всё, кроме букв, цифр и пробелов
+    tokens = text.split()
+    tokens = [word for word in tokens if word not in stop_words]
+    tokens = [stemmer.stem(word) for word in tokens]
+    return tokens
+
+def count_ok_and_not_ok(defect_descr):
+    ok_count = 0
+    not_ok_count = 0
+
+    for defect in defect_descr:
+        # Извлекаем комментарий после кода дефекта
+        match = re.match(r"^01-01.*?(\(.*\))", defect)
+        if match:
+            comment = match.group(1).lower()  # Приводим к нижнему регистру для унификации
+
+            # Ищем "ок" и "не ок"
+            ok_count += len(re.findall(r"ок", comment))
+            not_ok_count += len(re.findall(r"не ок", comment))
+
+    return {'ok_count': ok_count, 'not_ok_count': not_ok_count}
+
+
+def manual_process_defects(defect_list):
+    '''
+    вручную сжимает число уникальных дефектов
+    '''
+    if defect_list is None:
+        return defect_list
+
+    processed_defects = []
+
+    # Дефекты, которые не подлежат разбиению в зависимости от комментариев
+    codes_to_keep = {"00-02", "00-03", "00-05", "00-06", "00-07", "00-10", "00-23", "87-01","87-02",
+                     "08-07", "04-08", "04-01", "01-14", "01-11", "02-03", "02-07", "02-14", "04-02",
+                     "01-00", "02-21", "02-26"}
+
+    for defect in defect_list:
+        if isinstance(defect, str):
+
+            # 1. Если начинается с одного из codes_to_keep — оставляем только код, комментарии удаляем
+            if any(defect.startswith(code) for code in codes_to_keep):
+                code = defect.split()[0]
+                processed_defects.append(code)
+
+            # 2. Обработка 00-01 с определёнными комментариями → 00-23
+            elif re.match(r"^00-01", defect):
+                if any(comment in defect for comment in ["доставлен без резины", "доставлен без А-резины", "разобранн"]):
+                    processed_defects.append("00-23")
+                else:
+                    processed_defects.append("00-01")
+
+            # 3. Обработка дефектов вида  98-XX
+            elif re.match(r"^98-\d{2}", defect):
+                if "98-03" in defect or "98-17" in defect:
+                    processed_defects.append("98-17")
+                else:
+                    processed_defects.append("98-07")
+
+            # 4. Обработка дефектов вида 30-ХХ
+            elif re.match(r"^30-\d{2}", defect):
+                if "30-34" in defect:
+                    processed_defects.append("30-34")
+                else:
+                    processed_defects.append("30-35")
+
+            # 5. Обрабатываем дефекты вида 21-ХХ
+            elif re.match(r"^21-\d{2}", defect):
+                code = defect.split()[0]
+                comment = defect[len(code):].lower()  # всё, что после кода, в нижнем регистре
+
+                if ("n" in comment and "g" in comment) or ("корроз" in comment):
+                    processed_defects.append(f"{code} (n/g)")
+                else:
+                    processed_defects.append(f"{code} (ok)")
+
+            # 6. Обрабатываем дефект вида 19-ХХ
+            elif re.match(r"^19-\d{2}", defect):
+                code = defect.split()[0]
+                processed_defects.append(code)
+
+            # 7. Обработка дефекта вида 12-ХХ
+            elif re.match(r"^12-\d{2}", defect):
+                code = defect.split()[0]
+                processed_defects.append(code)
+
+            # Обработка дефекта вида 00-04
+            elif re.match(r"^00-04", defect):
+                if "коннект" in defect.lower():
+                    processed_defects.append("00-04 (в обл. коннектора)")
+                else:
+                    processed_defects.append("00-04")
+
+            # 8. Обработка дефектов вида 09-XX
+            elif re.match(r"^09-(\d{2})", defect):  # Сохраняем цифры после дефекта 09-
+                match = re.match(r"^09-(\d{2})", defect)
+                defect_number = match.group(1)  # Получаем цифры XX
+
+                # Проверяем наличие ключевых слов в комментариях
+                comment = defect.lower()
+
+                if "значит" in comment and "видеокаб" not in comment and "незначит" not in comment:
+                    processed_defects.append(f"09-{defect_number} (значительное)")
+                elif "незначит" in comment and "видеокаб" not in comment:
+                    processed_defects.append(f"09-{defect_number} (незначительное)")
+                elif "значит" in comment and "видеокаб" in comment and "незначит" not in comment:
+                    processed_defects.append(f"09-{defect_number} (значительное, видеокабеля)")
+                elif "незначит" in comment and "видеокаб" in comment:
+                    processed_defects.append(f"09-{defect_number} (незначительное, видеокабеля)")
+                else:
+                    processed_defects.append(f"09-{defect_number}")
+
+            # Обработка дефектов 01-01
+            if re.match(r"^01-01", defect):
+                comment = defect.lower()
+                oks, noks = count_ok_and_not_ok(comment)
+
+                if ("новым") in comment and noks == 0 and not ("новой") in comment:
+                    processed_defects.append("01-01 (с новым коннектором - ок)")
+                elif ("новой") in comment and noks == 0 and ("новым") in comment:
+                    processed_defects.append("01-01 (с новой платой - ок)")
+                elif ("dual focus - не ок" not in comment) and ("новым") in comment and noks == 1:
+                    processed_defects.append("01-01 (с новой платой - не ок)")
+
+            # Обрабатываем дефекты 08-ХХ
+            elif re.match(r"^08-(\d{2})", defect):  # Сохраняем цифры после дефекта 08-
+                match = re.match(r"^08-(\d{2})", defect)
+                defect_number = match.group(1)  # Получаем цифры XX
+
+                # Проверяем комментарий на наличие "1"
+                comment = defect.lower()
+
+                # Обрабатываем дефекты 08-02, 08-04, 08-05
+                if defect_number in ["02", "04", "05"]:
+                    if "1" in comment:
+                        processed_defects.append(f"08-{defect_number} (1)")
+                    else:
+                        processed_defects.append(f"08-{defect_number}")
+                else:
+                    processed_defects.append(f"08-{defect_number}")
+
+
+            # Обработка 00-09 с особыми комментариями
+            elif re.match(r"^00-09", defect):
+                if any(word in defect.lower() for word in ["подъемника", "элеватора"]):
+                    processed_defects.append("00-09 (рычага подъемника щипцов)")
+                else:
+                    processed_defects.append("00-09")
+
+            elif re.match(r"^02-(01|02)", defect):
+                # Проверяем наличие "значит" или "незначит"
+                comment = defect.lower()
+
+                if "значит" in comment and "незначит" not in comment:
+                    # Добавляем "(значит)" если есть "значит"
+                    processed_defects.append(f"{defect.split()[0]} (значит)")
+                elif "незначит" in comment:
+                    # Добавляем "(незначит)" если есть "незначит"
+                    processed_defects.append(f"{defect.split()[0]} (незначит)")
+                else:
+                    # Если нет ни "значит", ни "незначит", оставляем дефект без комментариев
+                    processed_defects.append(defect.split()[0])
+
+
+
+
+            else:
+                processed_defects.append(defect)
+        else:
+            processed_defects.append(defect)
+
+    return processed_defects
+
+df['processed_defects'] = df['processed_defects'].apply(process_defects)
+
+
+# загрузка данных
+df = pd.read_excel("masked_data.xlsx")
+df['defects'] = df['defects'].astype(str)
+df['specification'] = df['specification'].str.split(',') # преобразуем таргет в список
+
+df = df.dropna(subset=['specification'])
+df = df.dropna(subset=['defects'])
 
 # преобразование дефектов с использований функций выше
-
 df['defects'] = df['defects'].apply(process_defects)
 df[['cycle_counts', 'defects']] = df['defects'].apply(extract_cycles_count)
 df['defects'] = df['defects'].apply(remove_99_defects)
@@ -183,4 +391,12 @@ df_transl = pd.read_excel("def_transl.xlsx")
 code_to_name = dict(zip(df_transl['code'], df_transl['col2']))
 df['defect_codes'] = df['defects'].apply(extract_defect_codes)
 df["defects_text_describtion"] = df["defects"].apply(lambda x: replace_defect_codes_with_description(x, df_transl))
+
+
+nltk.download('stopwords')
+stop_words = set(stopwords.words('russian'))
+stemmer = SnowballStemmer("russian")
+
+df['defects_text_describtion'] = df['defects_text_describtion'].apply(manual_preprocess_text)
+
 
