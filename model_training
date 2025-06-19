@@ -1,0 +1,62 @@
+from sklearn.preprocessing import MultiLabelBinarizer, OneHotEncoder, StandardScaler
+from sklearn.multiclass import OneVsRestClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LogisticRegression
+from scipy.sparse import hstack, csr_matrix
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.impute import SimpleImputer
+from sklearn.model_selection import GridSearchCV
+from sklearn.metrics import make_scorer, f1_score
+import numpy as np
+
+scorer = make_scorer(f1_score, average='micro')
+param_grid = {
+    'estimator__C': [0.01, 0.1, 1, 10, 100]
+}
+
+# 1) defect_codes рассмотрим как mlb
+
+X_text_arr = np.vstack(df['defects_text_describtion_emb_2'].values).astype(np.float32)
+X_text = csr_matrix(X_text_arr)
+
+# X_codes (multi-hot векторизация)
+mlb = MultiLabelBinarizer()
+X_codes = mlb.fit_transform(df['defect_codes'])
+
+# X_cat - 'model', 'type',  'rep_type'
+cat_features_1 = df[['model', 'type', 'rep_type']]
+encoder = OneHotEncoder(sparse_output=True)
+X_cat = encoder.fit_transform(cat_features_1)
+
+# StandardScaler
+num_features = df[['client_avg_cost', 'user_avg_cost', 'user_call_freq']]
+imputer = SimpleImputer(strategy='mean')
+X_num_imputed = imputer.fit_transform(num_features)
+scaler = StandardScaler()
+X_num = scaler.fit_transform(num_features)
+
+# td-idf
+tfidf_vectorizer = TfidfVectorizer()
+X_tfidf = tfidf_vectorizer.fit_transform(df['user_top10_defects'])
+
+
+# Y - target
+target_mlb = MultiLabelBinarizer()
+Y = target_mlb.fit_transform(df['specification_labels'])
+
+# X_1
+X = hstack([X_text, X_codes, X_cat, X_num, X_tfidf])
+
+ovr_lr = OneVsRestClassifier(LogisticRegression(max_iter=1000))
+
+# GridSearchCV
+grid_search = GridSearchCV(
+    estimator=ovr_lr,
+    param_grid=param_grid,
+    scoring=scorer,
+    cv=5,
+    n_jobs=-1,
+    verbose=1
+)
+
+grid_search.fit(X, Y)
